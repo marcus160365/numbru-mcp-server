@@ -6,3 +6,10 @@ compatibility_flags = ["nodejs_compat"]
 [[services]]
 binding = "NUMBRU_API"
 service = "numbru-api"
+
+[[kv_namespaces]]
+binding = "OAUTH_STATE"
+id = "ebf1b0e0747f42999366d55a9f5b091f"
+
+[vars]
+WORKOS_CLIENT_ID = "client_01KQJGXCDF8H9DXAP7XMKJDDT8"

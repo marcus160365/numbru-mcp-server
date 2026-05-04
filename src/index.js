@@ -2,8 +2,286 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpHandler } from "agents/mcp";
 import { z } from "zod";
 
+// ---------------------------------------------------------------------------
+// OAuth 2.1 helpers
+// ---------------------------------------------------------------------------
+
+function generateId(len = 32) {
+  const arr = new Uint8Array(len);
+  crypto.getRandomValues(arr);
+  return Array.from(arr, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function sha256Base64url(plain) {
+  const data = new TextEncoder().encode(plain);
+  const hash = await crypto.subtle.digest("SHA-256", data);
+  return btoa(String.fromCharCode(...new Uint8Array(hash)))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+}
+
+function baseUrl(request) {
+  const url = new URL(request.url);
+  return `${url.protocol}//${url.host}`;
+}
+
+// ---------------------------------------------------------------------------
+// OAuth endpoint handlers
+// ---------------------------------------------------------------------------
+
+async function handleOAuthMetadata(request) {
+  const base = baseUrl(request);
+  return Response.json({
+    issuer: base,
+    authorization_endpoint: `${base}/authorize`,
+    token_endpoint: `${base}/token`,
+    registration_endpoint: `${base}/register`,
+    response_types_supported: ["code"],
+    grant_types_supported: ["authorization_code", "refresh_token"],
+    token_endpoint_auth_methods_supported: ["none"],
+    code_challenge_methods_supported: ["S256"],
+  });
+}
+
+async function handleRegister(request, env) {
+  const body = await request.json();
+  const clientId = `mcp_${generateId(16)}`;
+
+  await env.OAUTH_STATE.put(
+    `client:${clientId}`,
+    JSON.stringify({
+      client_id: clientId,
+      redirect_uris: body.redirect_uris || [],
+      client_name: body.client_name || "MCP Client",
+      created_at: Date.now(),
+    }),
+    { expirationTtl: 86400 * 30 } // 30 days
+  );
+
+  return Response.json({
+    client_id: clientId,
+    redirect_uris: body.redirect_uris || [],
+    client_name: body.client_name || "MCP Client",
+    token_endpoint_auth_method: "none",
+  }, { status: 201 });
+}
+
+async function handleAuthorize(request, env) {
+  const url = new URL(request.url);
+  const clientId = url.searchParams.get("client_id");
+  const redirectUri = url.searchParams.get("redirect_uri");
+  const state = url.searchParams.get("state");
+  const codeChallenge = url.searchParams.get("code_challenge");
+  const codeChallengeMethod = url.searchParams.get("code_challenge_method");
+
+  if (!clientId || !redirectUri || !codeChallenge) {
+    return Response.json({ error: "invalid_request", error_description: "Missing required parameters" }, { status: 400 });
+  }
+
+  // Verify registered client
+  const clientData = await env.OAUTH_STATE.get(`client:${clientId}`);
+  if (!clientData) {
+    return Response.json({ error: "invalid_client" }, { status: 400 });
+  }
+
+  // Store the OAuth session state
+  const sessionId = generateId(16);
+  await env.OAUTH_STATE.put(
+    `session:${sessionId}`,
+    JSON.stringify({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      state,
+      code_challenge: codeChallenge,
+      code_challenge_method: codeChallengeMethod || "S256",
+    }),
+    { expirationTtl: 600 } // 10 min
+  );
+
+  // Build WorkOS authorization URL
+  const workosAuthUrl = new URL("https://api.workos.com/user_management/authorize");
+  workosAuthUrl.searchParams.set("client_id", env.WORKOS_CLIENT_ID);
+  workosAuthUrl.searchParams.set("redirect_uri", `${baseUrl(request)}/callback`);
+  workosAuthUrl.searchParams.set("response_type", "code");
+  workosAuthUrl.searchParams.set("state", sessionId);
+  workosAuthUrl.searchParams.set("provider", "authkit");
+
+  return Response.redirect(workosAuthUrl.toString(), 302);
+}
+
+async function handleCallback(request, env) {
+  const url = new URL(request.url);
+  const code = url.searchParams.get("code");
+  const sessionId = url.searchParams.get("state");
+
+  if (!code || !sessionId) {
+    return Response.json({ error: "invalid_request" }, { status: 400 });
+  }
+
+  // Retrieve session
+  const sessionData = await env.OAUTH_STATE.get(`session:${sessionId}`);
+  if (!sessionData) {
+    return Response.json({ error: "invalid_session", error_description: "Session expired or not found" }, { status: 400 });
+  }
+  const session = JSON.parse(sessionData);
+
+  // Exchange code with WorkOS for tokens
+  const tokenRes = await fetch("https://api.workos.com/user_management/authenticate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      client_id: env.WORKOS_CLIENT_ID,
+      client_secret: env.WORKOS_API_KEY,
+      grant_type: "authorization_code",
+      code,
+    }),
+  });
+
+  if (!tokenRes.ok) {
+    const err = await tokenRes.text();
+    console.error("WorkOS token exchange failed:", err);
+    return Response.json({ error: "upstream_auth_failed" }, { status: 502 });
+  }
+
+  const workosTokens = await tokenRes.json();
+
+  // Generate our own authorization code for the MCP client
+  const mcpCode = generateId(32);
+  await env.OAUTH_STATE.put(
+    `code:${mcpCode}`,
+    JSON.stringify({
+      client_id: session.client_id,
+      code_challenge: session.code_challenge,
+      code_challenge_method: session.code_challenge_method,
+      access_token: workosTokens.access_token,
+      refresh_token: workosTokens.refresh_token,
+    }),
+    { expirationTtl: 300 } // 5 min
+  );
+
+  // Clean up session
+  await env.OAUTH_STATE.delete(`session:${sessionId}`);
+
+  // Redirect back to MCP client with our auth code
+  const redirectUrl = new URL(session.redirect_uri);
+  redirectUrl.searchParams.set("code", mcpCode);
+  if (session.state) redirectUrl.searchParams.set("state", session.state);
+
+  return Response.redirect(redirectUrl.toString(), 302);
+}
+
+async function handleToken(request, env) {
+  let body;
+  const contentType = request.headers.get("Content-Type") || "";
+  if (contentType.includes("application/json")) {
+    body = await request.json();
+  } else {
+    body = Object.fromEntries(new URLSearchParams(await request.text()));
+  }
+
+  const { grant_type, code, code_verifier, refresh_token, client_id } = body;
+
+  if (grant_type === "authorization_code") {
+    if (!code || !code_verifier) {
+      return Response.json({ error: "invalid_request", error_description: "Missing code or code_verifier" }, { status: 400 });
+    }
+
+    const codeData = await env.OAUTH_STATE.get(`code:${code}`);
+    if (!codeData) {
+      return Response.json({ error: "invalid_grant", error_description: "Code expired or not found" }, { status: 400 });
+    }
+    const stored = JSON.parse(codeData);
+
+    // Verify PKCE
+    const computedChallenge = await sha256Base64url(code_verifier);
+    if (computedChallenge !== stored.code_challenge) {
+      return Response.json({ error: "invalid_grant", error_description: "PKCE verification failed" }, { status: 400 });
+    }
+
+    // Clean up used code
+    await env.OAUTH_STATE.delete(`code:${code}`);
+
+    // Store refresh token mapping
+    const refreshId = generateId(32);
+    await env.OAUTH_STATE.put(
+      `refresh:${refreshId}`,
+      JSON.stringify({
+        client_id: stored.client_id,
+        workos_refresh_token: stored.refresh_token,
+      }),
+      { expirationTtl: 86400 * 7 } // 7 days
+    );
+
+    return Response.json({
+      access_token: stored.access_token,
+      token_type: "Bearer",
+      expires_in: 300,
+      refresh_token: refreshId,
+    });
+  }
+
+  if (grant_type === "refresh_token") {
+    if (!refresh_token) {
+      return Response.json({ error: "invalid_request" }, { status: 400 });
+    }
+
+    const refreshData = await env.OAUTH_STATE.get(`refresh:${refresh_token}`);
+    if (!refreshData) {
+      return Response.json({ error: "invalid_grant", error_description: "Refresh token expired" }, { status: 400 });
+    }
+    const stored = JSON.parse(refreshData);
+
+    // Exchange with WorkOS for new tokens
+    const tokenRes = await fetch("https://api.workos.com/user_management/authenticate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        client_id: env.WORKOS_CLIENT_ID,
+        client_secret: env.WORKOS_API_KEY,
+        grant_type: "refresh_token",
+        refresh_token: stored.workos_refresh_token,
+      }),
+    });
+
+    if (!tokenRes.ok) {
+      await env.OAUTH_STATE.delete(`refresh:${refresh_token}`);
+      return Response.json({ error: "invalid_grant", error_description: "WorkOS refresh failed" }, { status: 400 });
+    }
+
+    const newTokens = await tokenRes.json();
+
+    // Update refresh token mapping
+    const newRefreshId = generateId(32);
+    await env.OAUTH_STATE.put(
+      `refresh:${newRefreshId}`,
+      JSON.stringify({
+        client_id: stored.client_id,
+        workos_refresh_token: newTokens.refresh_token,
+      }),
+      { expirationTtl: 86400 * 7 }
+    );
+
+    // Delete old refresh token
+    await env.OAUTH_STATE.delete(`refresh:${refresh_token}`);
+
+    return Response.json({
+      access_token: newTokens.access_token,
+      token_type: "Bearer",
+      expires_in: 300,
+      refresh_token: newRefreshId,
+    });
+  }
+
+  return Response.json({ error: "unsupported_grant_type" }, { status: 400 });
+}
+
+// ---------------------------------------------------------------------------
+// MCP tool definitions
+// ---------------------------------------------------------------------------
+
 function createServer(env, authToken) {
-  const api = env.NUMBRU_API; // Service binding to numbru-api worker
+  const api = env.NUMBRU_API;
   const headers = authToken
     ? { "Content-Type": "application/json", Authorization: authToken }
     : { "Content-Type": "application/json" };
@@ -215,8 +493,44 @@ function createServer(env, authToken) {
   return server;
 }
 
+// ---------------------------------------------------------------------------
+// Main fetch handler — routes OAuth endpoints, then MCP
+// ---------------------------------------------------------------------------
+
 export default {
-  fetch(request, env, ctx) {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    const path = url.pathname;
+
+    // CORS preflight
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+        },
+      });
+    }
+
+    // --- OAuth 2.1 endpoints ---
+    if (path === "/.well-known/oauth-authorization-server") {
+      return handleOAuthMetadata(request);
+    }
+    if (path === "/register" && request.method === "POST") {
+      return handleRegister(request, env);
+    }
+    if (path === "/authorize" && request.method === "GET") {
+      return handleAuthorize(request, env);
+    }
+    if (path === "/callback" && request.method === "GET") {
+      return handleCallback(request, env);
+    }
+    if (path === "/token" && request.method === "POST") {
+      return handleToken(request, env);
+    }
+
+    // --- MCP handler (everything else) ---
     const authToken = request.headers.get("Authorization");
     const server = createServer(env, authToken);
     return createMcpHandler(server, { route: "/" })(request, env, ctx);
