@@ -490,6 +490,85 @@ function createServer(env, authToken) {
     }
   );
 
+  // --- Complete Profile ---
+  server.registerTool(
+    "complete_profile",
+    {
+      title: "Complete Profile",
+      description:
+        "Complete the user's profile (one-time signup). Sets name, profession, and generates a User Compass. Required before creating clients.",
+      inputSchema: {
+        first_name: z.string().min(1).describe("First name (required)"),
+        last_name: z.string().min(1).describe("Last name (required)"),
+        profession: z.enum(["real_estate", "design", "hospitality_travel", "event_planning"]).describe("Profession (required)"),
+        middle_name: z.string().optional().describe("Middle name (optional)"),
+        maiden_name: z.string().optional().describe("Maiden/birth name (optional)"),
+        phone: z.string().optional().describe("Phone number (optional)"),
+        dob: z.string().optional().describe("Date of birth YYYY-MM-DD (optional, improves compass)"),
+      },
+    },
+    async ({ first_name, last_name, profession, middle_name, maiden_name, phone, dob }) => {
+      const body = { first_name, last_name, profession };
+      if (middle_name) body.middle_name = middle_name;
+      if (maiden_name) body.maiden_name = maiden_name;
+      if (phone) body.phone = phone;
+      if (dob) body.dob = dob;
+
+      const res = await api.fetch("https://dummy/me/profile", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }], isError: true };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+  );
+
+  // --- Update Profile ---
+  server.registerTool(
+    "update_profile",
+    {
+      title: "Update Profile",
+      description:
+        "Update the user's profile settings. Can change name, profession, phone, DOB, or custom prompt.",
+      inputSchema: {
+        first_name: z.string().optional().describe("First name"),
+        last_name: z.string().optional().describe("Last name"),
+        profession: z.enum(["real_estate", "design", "hospitality_travel", "event_planning"]).optional().describe("Profession"),
+        middle_name: z.string().optional().describe("Middle name"),
+        maiden_name: z.string().optional().describe("Maiden/birth name"),
+        phone: z.string().optional().describe("Phone number"),
+        dob: z.string().optional().describe("Date of birth YYYY-MM-DD"),
+        custom_prompt: z.string().optional().describe("Custom instructions for AI interactions"),
+      },
+    },
+    async ({ first_name, last_name, profession, middle_name, maiden_name, phone, dob, custom_prompt }) => {
+      const body = {};
+      if (first_name !== undefined) body.first_name = first_name;
+      if (last_name !== undefined) body.last_name = last_name;
+      if (profession !== undefined) body.profession = profession;
+      if (middle_name !== undefined) body.middle_name = middle_name;
+      if (maiden_name !== undefined) body.maiden_name = maiden_name;
+      if (phone !== undefined) body.phone = phone;
+      if (dob !== undefined) body.dob = dob;
+      if (custom_prompt !== undefined) body.custom_prompt = custom_prompt;
+
+      const res = await api.fetch("https://dummy/me/profile", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }], isError: true };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+  );
+
   return server;
 }
 
