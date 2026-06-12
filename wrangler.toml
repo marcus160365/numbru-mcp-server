@@ -7,9 +7,77 @@ compatibility_flags = ["nodejs_compat"]
 binding = "NUMBRU_API"
 service = "numbru-api"
 
+[[services]]
+binding = "COMPASS_ENGINE"
+service = "numbru-compass-engine"
+
 [[kv_namespaces]]
 binding = "OAUTH_STATE"
 id = "ebf1b0e0747f42999366d55a9f5b091f"
 
 [vars]
+WORKOS_CLIENT_ID = "client_01KQJGXCDF8H9DXAP7XMKJDDT8"
+
+# ---------------------------------------------------------------------------
+# Environments — one worker per branch (dev / staging / prod).
+# [[services]] and [[kv_namespaces]] are NOT inherited from the top-level
+# config — they must be restated per env. [vars] IS inherited.
+# Each env's NUMBRU_API + COMPASS_ENGINE bindings point at the matching env
+# of the numbru-api worker so dev talks to dev, etc. KV reuses the same
+# namespace across envs for now — split later by adding new IDs.
+# Secrets (WORKOS_API_KEY, NUMBRU_KEY): `wrangler secret put <NAME> --env <env>`.
+# ---------------------------------------------------------------------------
+
+[env.dev]
+name = "numbru-mcp-server-dev"
+
+[[env.dev.services]]
+binding = "NUMBRU_API"
+service = "numbru-api-dev"
+
+[[env.dev.services]]
+binding = "COMPASS_ENGINE"
+service = "numbru-api-dev"
+
+[[env.dev.kv_namespaces]]
+binding = "OAUTH_STATE"
+id = "ebf1b0e0747f42999366d55a9f5b091f"
+
+[env.dev.vars]
+WORKOS_CLIENT_ID = "client_01KQJGXCDF8H9DXAP7XMKJDDT8"
+
+[env.staging]
+name = "numbru-mcp-server-staging"
+
+[[env.staging.services]]
+binding = "NUMBRU_API"
+service = "numbru-api-staging"
+
+[[env.staging.services]]
+binding = "COMPASS_ENGINE"
+service = "numbru-api-staging"
+
+[[env.staging.kv_namespaces]]
+binding = "OAUTH_STATE"
+id = "ebf1b0e0747f42999366d55a9f5b091f"
+
+[env.staging.vars]
+WORKOS_CLIENT_ID = "client_01KQJGXCDF8H9DXAP7XMKJDDT8"
+
+[env.prod]
+name = "numbru-mcp-server"
+
+[[env.prod.services]]
+binding = "NUMBRU_API"
+service = "numbru-api"
+
+[[env.prod.services]]
+binding = "COMPASS_ENGINE"
+service = "numbru-api"
+
+[[env.prod.kv_namespaces]]
+binding = "OAUTH_STATE"
+id = "ebf1b0e0747f42999366d55a9f5b091f"
+
+[env.prod.vars]
 WORKOS_CLIENT_ID = "client_01KQJGXCDF8H9DXAP7XMKJDDT8"

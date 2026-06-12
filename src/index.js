@@ -569,6 +569,45 @@ function createServer(env, authToken) {
     }
   );
 
+  // --- Generate Compass ---
+  server.registerTool(
+    "generate_compass",
+    {
+      title: "Generate Compass",
+      description:
+        "Generate a numbrU Compass profile for a person using the Compass engine. Returns personality insights, communication style, and relationship strategies.",
+      inputSchema: {
+        name: z.string().min(1).describe("Full name of the person"),
+        dob: z.string().describe("Date of birth in YYYY-MM-DD format"),
+        vertical: z
+          .enum(["real_estate", "sales", "civic", "insurance"])
+          .default("real_estate")
+          .describe("Industry vertical (default: real_estate)"),
+      },
+    },
+    async ({ name, dob, vertical }) => {
+      const res = await env.COMPASS_ENGINE.fetch("https://dummy/compass", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(authToken ? { Authorization: authToken } : {}),
+        },
+        body: JSON.stringify({ vertical, payload: { full_name: name, dob } }),
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        return {
+          content: [{ type: "text", text: `Compass engine error (${res.status}): ${errText}` }],
+          isError: true,
+        };
+      }
+
+      const data = await res.json();
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+  );
+
   return server;
 }
 
