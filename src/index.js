@@ -368,7 +368,7 @@ function createServer(env, authToken) {
         dob: z
           .string()
           .optional()
-          .describe("Date of birth in YYYY-MM-DD format (optional, improves compass accuracy)"),
+          .describe("Date of birth in YYYY-MM-DD format (optional, improves compass accuracy). Do not ask the user for this before calling — proceed with name only and let the engine handle it."),
         key_parties: z
           .array(
             z.object({
@@ -387,20 +387,63 @@ function createServer(env, authToken) {
           .boolean()
           .optional()
           .describe("Is this the first interaction with this client? Default: true"),
+        vertical: z
+          .enum(["real_estate", "sales", "civic", "insurance"])
+          .optional()
+          .describe("Industry vertical override. Defaults to the user's profession if omitted."),
       },
     },
-    async ({ first_name, middle_name, last_name, dob, key_parties, must_haves_avoids, is_first_interaction }) => {
+    async ({ first_name, middle_name, last_name, dob, key_parties, must_haves_avoids, is_first_interaction, vertical }) => {
       const body = { first_name, last_name };
       if (middle_name !== undefined) body.middle_name = middle_name;
       if (dob !== undefined) body.dob = dob;
       if (key_parties !== undefined) body.key_parties = key_parties;
       if (must_haves_avoids !== undefined) body.must_haves_avoids = must_haves_avoids;
       if (is_first_interaction !== undefined) body.is_first_interaction = is_first_interaction;
+      if (vertical !== undefined) body.vertical = vertical;
 
       const res = await api.fetch("https://dummy/people", {
         method: "POST",
         headers,
         body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return {
+          content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+          isError: true,
+        };
+      }
+      return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+  );// --- Batch Create Persons (Project Lazarus) ---
+  server.registerTool(
+    "batch_create_persons",
+    {
+      title: "Batch Create Persons",
+      description:
+  "Create up to 10 people (clients) in parallel and generate a Client Compass for each. Use this for re-engaging dormant leads — a name is enough. IMPORTANT: Return the full Start Here coaching for each person (ask_them, know_this, avoid_this) — do not summarize or create tables. Present each person's compass_summary_text and all three Start Here items in full.",
+      inputSchema: {
+        contacts: z
+          .array(
+            z.object({
+              first_name: z.string().min(1).max(200),
+              last_name: z.string().min(1).max(200),
+              middle_name: z.string().max(200).optional(),
+              dob: z.string().optional().describe("Date of birth in YYYY-MM-DD format (optional)"),
+              vertical: z.enum(["real_estate", "sales", "civic", "insurance"]).optional(),
+            })
+          )
+          .min(1)
+          .max(10)
+          .describe("Array of 1–10 contacts to profile. First and last name required for each."),
+      },
+    },
+    async ({ contacts }) => {
+      const res = await api.fetch("https://dummy/people/batch", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ contacts }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -500,11 +543,11 @@ function createServer(env, authToken) {
       inputSchema: {
         first_name: z.string().min(1).describe("First name (required)"),
         last_name: z.string().min(1).describe("Last name (required)"),
-        profession: z.enum(["real_estate", "design", "hospitality_travel", "event_planning"]).describe("Profession (required)"),
+        profession: z.enum(["real_estate", "sales", "civic", "insurance", "design", "hospitality_travel", "event_planning"]).describe("Profession (required)"),
         middle_name: z.string().optional().describe("Middle name (optional)"),
         maiden_name: z.string().optional().describe("Maiden/birth name (optional)"),
         phone: z.string().optional().describe("Phone number (optional)"),
-        dob: z.string().optional().describe("Date of birth YYYY-MM-DD (optional, improves compass)"),
+        dob: z.string().optional().describe("Date of birth YYYY-MM-DD (optional, improves compass). Do not ask the user for this before calling — proceed with name only."),
       },
     },
     async ({ first_name, last_name, profession, middle_name, maiden_name, phone, dob }) => {
@@ -537,7 +580,7 @@ function createServer(env, authToken) {
       inputSchema: {
         first_name: z.string().optional().describe("First name"),
         last_name: z.string().optional().describe("Last name"),
-        profession: z.enum(["real_estate", "design", "hospitality_travel", "event_planning"]).optional().describe("Profession"),
+        profession: z.enum(["real_estate", "sales", "civic", "insurance", "design", "hospitality_travel", "event_planning"]).optional().describe("Profession"),
         middle_name: z.string().optional().describe("Middle name"),
         maiden_name: z.string().optional().describe("Maiden/birth name"),
         phone: z.string().optional().describe("Phone number"),
@@ -626,7 +669,7 @@ export default {
         headers: {
           "Access-Control-Allow-Origin": "*",
           "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Auth-Token",
         },
       });
     }
@@ -648,8 +691,189 @@ export default {
       return handleToken(request, env);
     }
 
+    // --- API key endpoint ---
+    if (path === "/api/me/key" && request.method === "GET") {
+      const authToken = request.headers.get("Authorization");
+      if (!authToken) {
+        return Response.json(
+          { error: "unauthorized", message: "Valid authorization token required." },
+          { status: 401, headers: { "Access-Control-Allow-Origin": "*" } }
+        );
+      }
+
+      const token = authToken.replace("Bearer ", "").trim();
+
+      let userId;
+      let userEmail;
+      try {
+        // Decode JWT payload without verification to extract user ID and email
+        const parts = token.split(".");
+        if (parts.length !== 3) throw new Error("invalid jwt");
+        const payload = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/")));
+        userId = payload.sub;
+        userEmail = payload.email;
+        if (!userId && !userEmail) throw new Error("no sub or email claim");
+      } catch {
+        return Response.json(
+          { error: "unauthorized", message: "Valid authorization token required." },
+          { status: 401, headers: { "Access-Control-Allow-Origin": "*" } }
+        );
+      }
+
+      try {
+        // Try user_id first, fall back to email match
+        let row = await env.DB.prepare(
+          "SELECT widget_api_key, is_active, subscription_status FROM users WHERE user_id = ? LIMIT 1"
+        ).bind(userId).first();
+        if (!row && userEmail) {
+          row = await env.DB.prepare(
+            "SELECT widget_api_key, is_active, subscription_status FROM users WHERE email = ? LIMIT 1"
+          ).bind(userEmail).first();
+        }
+
+        if (!row) {
+          return Response.json(
+            { error: "user_not_found", message: "No account found for this token." },
+            { status: 404, headers: { "Access-Control-Allow-Origin": "*" } }
+          );
+        }
+
+        if (!row.is_active || row.subscription_status !== "active") {
+          return Response.json(
+            { error: "subscription_inactive", message: "No active subscription found." },
+            { status: 403, headers: { "Access-Control-Allow-Origin": "*" } }
+          );
+        }
+
+        return Response.json(
+          { widget_api_key: row.widget_api_key, subscription_status: row.subscription_status },
+          { status: 200, headers: { "Access-Control-Allow-Origin": "*" } }
+        );
+      } catch {
+        return Response.json(
+          { error: "internal_error", message: "Unable to retrieve key. Try again." },
+          { status: 500, headers: { "Access-Control-Allow-Origin": "*" } }
+        );
+      }
+    }
+
+    // --- API key endpoint ---
+    if (path === "/api/me/key" && request.method === "GET") {
+      const authToken = request.headers.get("Authorization");
+      if (!authToken) {
+        return Response.json(
+          { error: "unauthorized", message: "Valid authorization token required." },
+          { status: 401, headers: { "Access-Control-Allow-Origin": "*" } }
+        );
+      }
+
+      // Extract WorkOS access token and look up user in D1
+      const token = authToken.replace("Bearer ", "").trim();
+
+      // Verify token with WorkOS
+      let userId;
+      try {
+        const verifyRes = await fetch("https://api.workos.com/user_management/authenticate/token", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            client_id: env.WORKOS_CLIENT_ID,
+            client_secret: env.WORKOS_API_KEY,
+            token,
+          }),
+        });
+        if (!verifyRes.ok) throw new Error("invalid token");
+        const userData = await verifyRes.json();
+        userId = userData.user?.id ?? userData.sub;
+      } catch {
+        return Response.json(
+          { error: "unauthorized", message: "Valid authorization token required." },
+          { status: 401, headers: { "Access-Control-Allow-Origin": "*" } }
+        );
+      }
+
+      // Query D1 for widget_api_key
+      try {
+        // Try user_id first, fall back to email match
+        let row = await env.DB.prepare(
+          "SELECT widget_api_key, is_active, subscription_status FROM users WHERE user_id = ? LIMIT 1"
+        ).bind(userId).first();
+        if (!row && userEmail) {
+          row = await env.DB.prepare(
+            "SELECT widget_api_key, is_active, subscription_status FROM users WHERE email = ? LIMIT 1"
+          ).bind(userEmail).first();
+        }
+
+        if (!row) {
+          return Response.json(
+            { error: "user_not_found", message: "No account found for this token." },
+            { status: 404, headers: { "Access-Control-Allow-Origin": "*" } }
+          );
+        }
+
+        if (!row.is_active || row.subscription_status !== "active") {
+          return Response.json(
+            { error: "subscription_inactive", message: "No active subscription found." },
+            { status: 403, headers: { "Access-Control-Allow-Origin": "*" } }
+          );
+        }
+
+        return Response.json(
+          { widget_api_key: row.widget_api_key, subscription_status: row.subscription_status },
+          { status: 200, headers: { "Access-Control-Allow-Origin": "*" } }
+        );
+      } catch {
+        return Response.json(
+          { error: "internal_error", message: "Unable to retrieve key. Try again." },
+          { status: 500, headers: { "Access-Control-Allow-Origin": "*" } }
+        );
+      }
+    }
+
+
+    // --- Key by email endpoint (Supabase auth bridge) ---
+    if (path === "/api/key-by-email" && request.method === "GET") {
+      const email = new URL(request.url).searchParams.get("email");
+      if (!email) {
+        return Response.json(
+          { error: "missing_email", message: "Email parameter required." },
+          { status: 400, headers: { "Access-Control-Allow-Origin": "*" } }
+        );
+      }
+
+      try {
+        const row = await env.DB.prepare(
+          "SELECT widget_api_key, is_active, subscription_status FROM users WHERE email = ? LIMIT 1"
+        ).bind(email).first();
+
+        if (!row) {
+          return Response.json(
+            { error: "user_not_found", message: "No account found for this email." },
+            { status: 404, headers: { "Access-Control-Allow-Origin": "*" } }
+          );
+        }
+
+        if (!row.is_active || row.subscription_status !== "active") {
+          return Response.json(
+            { error: "subscription_inactive", message: "No active subscription found." },
+            { status: 403, headers: { "Access-Control-Allow-Origin": "*" } }
+          );
+        }
+
+        return Response.json(
+          { widget_api_key: row.widget_api_key, subscription_status: row.subscription_status },
+          { status: 200, headers: { "Access-Control-Allow-Origin": "*" } }
+        );
+      } catch {
+        return Response.json(
+          { error: "internal_error", message: "Unable to retrieve key. Try again." },
+          { status: 500, headers: { "Access-Control-Allow-Origin": "*" } }
+        );
+      }
+    }
+
     // --- MCP handler (everything else) ---
-    const authToken = request.headers.get("Authorization");
+    const authToken = request.headers.get("Authorization") || (env.NUMBRU_KEY ? "Bearer " + env.NUMBRU_KEY : null);
     const server = createServer(env, authToken);
     return createMcpHandler(server, { route: "/" })(request, env, ctx);
   },

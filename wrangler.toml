@@ -16,7 +16,7 @@ binding = "OAUTH_STATE"
 id = "ebf1b0e0747f42999366d55a9f5b091f"
 
 [vars]
-WORKOS_CLIENT_ID = "client_01KQJGXCDF8H9DXAP7XMKJDDT8"
+WORKOS_CLIENT_ID = "client_01KP6EA4W51HPX7DTS8BWGRTEZ"
 
 # ---------------------------------------------------------------------------
 # Environments — one worker per branch (dev / staging / prod).
@@ -27,6 +27,12 @@ WORKOS_CLIENT_ID = "client_01KQJGXCDF8H9DXAP7XMKJDDT8"
 # namespace across envs for now — split later by adding new IDs.
 # Secrets (WORKOS_API_KEY, NUMBRU_KEY): `wrangler secret put <NAME> --env <env>`.
 # ---------------------------------------------------------------------------
+
+
+[[d1_databases]]
+binding = "DB"
+database_name = "numbru-db"
+database_id = "bf5a856d-f454-4100-af27-633027d014ce"
 
 [env.dev]
 name = "numbru-mcp-server-dev"
@@ -44,7 +50,7 @@ binding = "OAUTH_STATE"
 id = "ebf1b0e0747f42999366d55a9f5b091f"
 
 [env.dev.vars]
-WORKOS_CLIENT_ID = "client_01KQJGXCDF8H9DXAP7XMKJDDT8"
+WORKOS_CLIENT_ID = "client_01KP6EA4W51HPX7DTS8BWGRTEZ"
 
 [env.staging]
 name = "numbru-mcp-server-staging"
@@ -62,10 +68,15 @@ binding = "OAUTH_STATE"
 id = "ebf1b0e0747f42999366d55a9f5b091f"
 
 [env.staging.vars]
-WORKOS_CLIENT_ID = "client_01KQJGXCDF8H9DXAP7XMKJDDT8"
+WORKOS_CLIENT_ID = "client_01KP6EA4W51HPX7DTS8BWGRTEZ"
 
 [env.prod]
 name = "numbru-mcp-server"
+[[env.prod.d1_databases]]
+binding = "DB"
+database_name = "numbru-db"
+database_id = "bf5a856d-f454-4100-af27-633027d014ce"
+
 
 [[env.prod.services]]
 binding = "NUMBRU_API"
@@ -80,4 +91,4 @@ binding = "OAUTH_STATE"
 id = "ebf1b0e0747f42999366d55a9f5b091f"
 
 [env.prod.vars]
-WORKOS_CLIENT_ID = "client_01KQJGXCDF8H9DXAP7XMKJDDT8"
+WORKOS_CLIENT_ID = "client_01KP6EA4W51HPX7DTS8BWGRTEZ"
