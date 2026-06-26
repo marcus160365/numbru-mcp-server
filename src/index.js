@@ -318,11 +318,31 @@ function createServer(env, authToken) {
           .string()
           .optional()
           .describe("Search by name (partial match, case-insensitive)"),
+        archetype: z
+          .enum(["Initiator", "Connector", "Creator", "Operator", "Maverick", "Guardian", "Navigator", "Architect", "Advocate", "Lighthouse", "Blueprint", "Mentor"])
+          .optional()
+          .describe("Filter by behavioral archetype"),
+        voice: z
+          .string()
+          .optional()
+          .describe("Filter by communication voice (e.g. direct, warm, conversational)"),
+        pace: z
+          .string()
+          .optional()
+          .describe("Filter by preferred pace (e.g. quick, measured, deliberate)"),
+        tone: z
+          .string()
+          .optional()
+          .describe("Filter by tone (e.g. confident, collaborative, analytical)"),
       },
     },
-    async ({ search }) => {
+    async ({ search, archetype, voice, pace, tone }) => {
       const params = new URLSearchParams();
       if (search) params.set("search", search);
+      if (archetype) params.set("archetype", archetype);
+      if (voice) params.set("voice", voice);
+      if (pace) params.set("pace", pace);
+      if (tone) params.set("tone", tone);
       const url = `https://dummy/people${params.toString() ? "?" + params : ""}`;
       const res = await api.fetch(url, { headers });
       const data = await res.json();
