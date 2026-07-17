@@ -1,0 +1,15 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "com.numbru/client-compass",
+  "description": "Client Compass by numbrU — behavioral intelligence for client-facing professionals. Generates a fixed, person-specific strategy brief in seconds: what someone is protecting, how they make decisions, what not to trigger, and the safest way to open. Built for real estate agents, sales professionals, insurance producers, and customer success managers.",
+  "version": "1.0.0",
+  "repository": {
+    "url": "https://github.com/marcus160365/numbru-mcp-server"
+  },
+  "remotes": [
+    {
+      "url": "https://numbru-mcp-server.numbru.workers.dev",
+      "transport_type": "sse"
+    }
+  ]
+}
